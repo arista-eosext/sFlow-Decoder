@@ -1,0 +1,49 @@
+#!/usr/bin/perl
+# sFlow packet sample script helper for Splunk
+# Copyright (C) 2013 Arista Networks Inc. All Rights Reserved.
+
+die "ERROR: missing interface name\n" if ($ARGC != 0);
+my $debug = 0;
+
+my @blacklist = qw ( sflow_245.version sflow_245.agent sflow_245.sub_agent_id sflow_245.sequence_number
+        sflow_245.sysuptime sflow_245.numsamples sflow_245.header_protocol sflow_245.sampletype
+        sflow_5.sample_length sflow_245.flow_record_format sflow_5.flow_data_length sflow_245.header 
+        eth.addr eth.ig eth.lg eth.trailer ip.addr ip.host ip.checksum ip.src_host
+        tcp.port udp.port tcp.options expert.message expert.severity expert.group );
+
+my $proto_state = 0; #  0 = looking, 1 = within a sflow packet
+my $indents = 0;
+while (my $k = pop @blacklist) { $bl{$k} = 1; }
+
+open(F,"tshark -i ".$ARGV[0]." -n -te -T pdml 'port 6343' |") || die "cannot start tshark: $!\n";
+while (<F>) {
+   chop;
+   printf STDERR "\t%s\n",substr($_,0,100) if $debug;
+   if ($proto_state == 0) {
+      next unless (/\<field name="" show="Flow sample/);
+      if ($_ =~ /(\s+)\</) {
+         $indents = length($1);
+         $proto_state = 1;
+         next;
+     }
+  }
+   if ($proto_state == 1) {
+      if (/^\s{$indents}\</) {
+         printf "t=".time;
+         foreach my $v (@data) { printf " %s",$v; }
+         printf "\n";
+         undef @data;
+         $proto_state = 0;
+         next;
+     } elsif (/\s+\<field name="([^"]+)".+show="([^"]+)"/) {
+        my ($field, $val) = ($1, $2);
+        next if (defined $bl{$field});
+        printf STDERR "<< stored\n" if $debug;
+        if ($val =~ /[a-z]/) {
+           push @data,$field.'="'.$val.'"';
+       } else {
+          push @data,$field."=".$val;
+      }
+    }
+  }
+}
